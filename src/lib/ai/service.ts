@@ -1,4 +1,4 @@
-import ZAI from "z-ai-web-dev-sdk";
+import Groq from "groq-sdk";
 import { db } from "@/lib/db";
 import type { AIAction, AIResponse, Task } from "@/types";
 import { serializeUserContext } from "./context";
@@ -145,9 +145,11 @@ export async function runAIChat(
   }
   messages.push({ role: "user", content: message });
 
-  const zai = await ZAI.create();
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
 
-  let { reply, actions, raw } = await callAndParse(zai, messages);
+let { reply, actions, raw } = await callAndParse(groq, messages);
 
   // Guard: if the user's message clearly asks for a mutating action but the
   // model returned only an ANSWER (no real action), re-prompt ONCE with a
@@ -158,7 +160,7 @@ export async function runAIChat(
   if (onlyAnswer && looksMutating(message) && replySoundsConfirming(reply)) {
     const nudge = `You replied "${reply.slice(0, 120)}" but did not emit any action object in "actions". The user's request "${message.slice(0, 120)}" requires a real action. Re-emit the full JSON now with the correct action object(s) in "actions" (e.g. CREATE_TASK, UPDATE_TASK, COMPLETE_TASK, CREATE_REMINDER, GENERATE_DAILY_PLAN). Do not just describe the change — emit the structured action so it executes.`;
     const retry: any[] = [...messages, { role: "user", content: nudge }];
-    const retryResult = await callAndParse(zai, retry);
+    const retryResult = await callAndParse(groq, retry);
     // Only adopt the retry if it produced real actions
     const realActions = retryResult.actions.filter((a) => a.type !== "ANSWER");
     if (realActions.length > 0) {
@@ -173,13 +175,14 @@ export async function runAIChat(
 
 // Single LLM call + JSON parse. Extracted so the guard can re-call.
 async function callAndParse(
-  zai: Awaited<ReturnType<typeof ZAI.create>>,
+  groq: Groq,
   messages: any[]
 ): Promise<{ reply: string; actions: AIAction[]; raw: string }> {
-  const completion = await zai.chat.completions.create({
-    messages,
-    thinking: { type: "disabled" },
-  });
+  const completion = await groq.chat.completions.create({
+  model: "openai/gpt-oss-20b",
+  messages,
+  temperature: 0.7,
+});
   const raw = completion.choices[0]?.message?.content ?? "";
   const parsed = extractJson(raw);
 
@@ -233,7 +236,9 @@ export async function generateDailyPlan(
   userId: string,
   date?: string
 ): Promise<{ summary: string; schedule: any[] }> {
-  const zai = await ZAI.create();
+  const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
   const target = date ? new Date(date) : new Date();
   target.setHours(0, 0, 0, 0);
   const end = new Date(target);
@@ -303,12 +308,13 @@ Produce a practical study/work schedule from 08:00 to 22:00, grouping by priorit
   ]
 }`;
 
-  const completion = await zai.chat.completions.create({
+  const completion = await groq.chat.completions.create({
+    model: "openai/gpt-oss-20b",
     messages: [
       { role: "assistant", content: prompt },
       { role: "user", content: "Plan my day." },
     ],
-    thinking: { type: "disabled" },
+    temperature: 0.7,
   });
   const raw = completion.choices[0]?.message?.content ?? "";
   const parsed = extractJson(raw);
